@@ -12,7 +12,7 @@ End-to-end pipeline for the [FlashInfer AI Kernel Generation Contest](https://be
 │  │ qwen2.5-coder:32b       │  │ gpt-4o / o3-mini             │  │
 │  │ deepseek-coder-v2:16b   │  │                              │  │
 │  └───────────┬─────────────┘  └──────────────┬───────────────┘  │
-│              │  OpenAI-compatible /v1/ API    │                  │
+│              │  OpenAI-compatible /v1/ API   │                  │
 │              └───────────────┬───────────────┘                  │
 └──────────────────────────────┼──────────────────────────────────┘
                                ▼
@@ -105,14 +105,13 @@ python scripts/run_modal.py
 
 ## Key Files
 
-| File                                           | Purpose                                        | Git tracked?              |
-| ---------------------------------------------- | ---------------------------------------------- | ------------------------- |
-| `flashinfer_bench/solution/triton/kernel.py` | Seed kernel (evolves)                          | Yes                       |
-| `workspace/evaluator.py`                     | OpenEvolve evaluator with profiler-in-the-loop | **No** (gitignored) |
-| `config.yaml`                                | OpenEvolve config (has API keys)               | **No** (gitignored) |
-| `scripts/bench.py`                           | Benchmark & ranking tool                       | Yes                       |
-| `flashinfer_bench/config.toml`               | FlashInfer submission metadata                 | Yes                       |
-| `profiler_loop/ranker.py`                    | Legacy stub (use bench.py instead)             | Yes                       |
+| File                                           | Purpose                                        |
+| ---------------------------------------------- | ---------------------------------------------- |
+| `flashinfer_bench/solution/triton/kernel.py` | Seed kernel (evolves)                          |
+| `workspace/evaluator.py (not included)`      | OpenEvolve evaluator with profiler-in-the-loop |
+| `config.yaml (not included)`                 | OpenEvolve config (has API keys)               |
+| `scripts/bench.py`                           | Benchmark & ranking tool                       |
+| `flashinfer_bench/config.toml`               | FlashInfer submission metadata                 |
 
 ## Profiler-in-the-Loop
 
@@ -136,3 +135,45 @@ This gives the LLM concrete performance data to guide its next mutation.
 - GEMM1: 7168 → 4096 (gate + up), SwiGLU, GEMM2: 2048 → 7168 (down)
 - 19 workloads varying `seq_len`
 - Scoring: geometric mean of speedup vs reference across all workloads
+
+## Our Kernel vs the Baseline
+
+### Baseline: `flashinfer_moe` (the reference to beat)
+
+FlashInfer's built-in `trtllm_fp8_block_scale_moe`
+
+```
+Entry:        main.py::run (returns output tensor)
+Language:     python (thin wrapper → C++/CUDA under the hood)
+DPS:          false
+Key detail:   tile_tokens_dim dynamically computed per seq_len:
+              next_power_of_2(seq_len * top_k / num_experts), clamped [8, 64]
+```
+
+### OpenEvolve seed kernel
+
+Ccorrect yet naive PyTorch implementation
+
+```
+Entry:        kernel.py::kernel (writes into pre-allocated output)
+Language:     triton (pure Triton/PyTorch, no flashinfer dependency)
+DPS:          true
+Status:       Correct, slow (~0.1-0.3x vs baseline)
+```
+
+### Win Con
+
+Key optimizations in order of impact:
+
+| # | Optimization                                                | Justification                                                                                          |
+| - | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| 1 | Replace per-expert Python loop with parallel Triton kernels | Eliminates serial bottleneck (32 sequential expert calls → 1 fused launch)                            |
+| 2 | Fuse FP8 dequant into GEMMs                                 | Avoids materializing full fp32 weight tensors in global memory                                         |
+| 3 | Use `tl.dot` with fp8 operands                            | Leverages FP8 tensor cores                                                                             |
+| 4 | Tile GEMMs for shared-memory reuse                          | Matches baseline's `tile_tokens_dim` strategy — tile token dim per expert, power-of-2 sizes [8, 64] |
+| 5 | Vectorize routing / top-k selection                         | Routing is cheap but serial; Triton-native top-k avoids Python overhead                                |
+| 6 | Minimize global memory traffic                              | Fuse SwiGLU between GEMM1 and GEMM2 so intermediate stays in SRAM                                      |
+
+The profiler-in-the-loop feeds NCU metrics (SM throughput, DRAM throughput, occupancy)
+back to the LLM after each correct kernel, so it can identify which of these bottlenecks
+to attack next.
