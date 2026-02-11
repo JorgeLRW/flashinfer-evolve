@@ -1,0 +1,14 @@
+# Local data (HuggingFace TraceSet)
+data/flashinfer-trace/
+
+# FlashInfer / CUDA build files
+flashinfer_bench/build/
+flashinfer_bench/dist/
+*.so
+*.pyc
+
+# Local experiment logs
+ncu_output/
+*.log
+
+# TBD

@@ -1,0 +1,6 @@
+[submodule "flashinfer_bench"]
+	path = flashinfer_bench
+	url = https://github.com/flashinfer-ai/flashinfer-bench-starter-kit
+[submodule "openevolve"]
+	path = openevolve
+	url = https://github.com/algorithmicsuperintelligence/openevolve.git
