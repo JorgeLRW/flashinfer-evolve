@@ -6,9 +6,25 @@ flashinfer_bench/build/
 flashinfer_bench/dist/
 *.so
 *.pyc
+__pycache__/
 
-# Local experiment logs
+# ── COMPETITION-SENSITIVE: Do NOT commit ────────────────────────────────────
+
+# Config contains machine IPs, LLM strategy, infra topology
+config.yaml
+
+# Evaluator contains scoring logic (competitive intel)
+workspace/evaluator.py
+
+# OpenEvolve outputs — evolved kernels are your submissions
+openevolve_output/
+**/checkpoints/
+**/evolution_trace*
+
+# Packed solutions (submission artifacts)
+flashinfer_bench/solution.json
+
+# ── Local experiment artifacts ──────────────────────────────────────────────
 ncu_output/
 *.log
-
-# TBD
+*.ncu-rep
