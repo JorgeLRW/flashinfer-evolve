@@ -20,3 +20,8 @@ Feb 12: Minor optimizations
 - Use FP8-friendly matmul paths where supported by target architecture.
 
 * Justification: Reducing redundancy in OE development via fundamental operations
+
+Feb 16: Validation files and pipeline validation
+
+- Validated kernel compiles and works via local compilation and output
+- Ran full openevolve pipeline
