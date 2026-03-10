@@ -1,5 +1,6 @@
 # Local data (HuggingFace TraceSet)
 data/flashinfer-trace/
+logs/
 
 # FlashInfer / CUDA build files
 flashinfer_bench/build/
@@ -12,12 +13,14 @@ __pycache__/
 
 # Config contains machine IPs, LLM strategy, infra topology
 config.yaml
+config_vllm.yaml
 
 # Evaluator contains scoring logic (competitive intel)
 workspace/evaluator.py
 
 # OpenEvolve outputs — evolved kernels are your submissions
 openevolve_output/
+flashinfer_bench/solution/triton/openevolve_output/
 **/checkpoints/
 **/evolution_trace*
 
@@ -26,5 +29,9 @@ flashinfer_bench/solution.json
 
 # ── Local experiment artifacts ──────────────────────────────────────────────
 ncu_output/
+logs/openevolve_dev_config_*.yaml
 *.log
 *.ncu-rep
+
+# Environment configs: Env local to laptop, no worrying over commits ─────────
+.env

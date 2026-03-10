@@ -1,0 +1,174 @@
+# ============================================================================
+# OpenEvolve Configuration — vLLM on vita server (8x A5000-24GB)
+# ============================================================================
+#
+# GPU allocation (dual-model setup):
+#   GPUs 2,3,4 (3x A5000) → vLLM instance 1: Qwen3-30B-A3B (fast explorer)
+#   GPU 5      (1x A5000) → vLLM instance 2: Qwen2.5-Coder-32B-Instruct-AWQ (deep coder)
+#   GPU 6      (1x A5000) → flashinfer-bench kernel evaluation
+#   GPUs 0,1   occupied by matthew, GPU 7 spare
+#
+# Usage:
+#   # Terminal 1: Qwen3-30B-A3B (fast MoE — 3B active, fits on 3 GPUs in FP16)
+#   CUDA_VISIBLE_DEVICES=2,3,4 python -m vllm.entrypoints.openai.api_server \
+#       --model Qwen/Qwen3-30B-A3B \
+#       --host 0.0.0.0 --port 8000 \
+#       --tensor-parallel-size 3 \
+#       --max-model-len 16384 \
+#       --gpu-memory-utilization 0.90 \
+#       --trust-remote-code
+#
+#   # Terminal 2: Qwen2.5-Coder-32B-Instruct-AWQ (4-bit, fits on 1 GPU)
+#   CUDA_VISIBLE_DEVICES=5 python -m vllm.entrypoints.openai.api_server \
+#       --model Qwen/Qwen2.5-Coder-32B-Instruct-AWQ \
+#       --host 0.0.0.0 --port 8001 \
+#       --max-model-len 16384 \
+#       --gpu-memory-utilization 0.90 \
+#       --quantization awq
+#
+#   # Terminal 3: OE
+#   cd ~/flashinfer-evolve
+#   export FIB_DATASET_PATH=~/flashinfer-evolve/data/flashinfer-trace
+#   export CUDA_VISIBLE_DEVICES=6
+#   OE_ENABLE_NCU=1 OE_NCU_FREQUENCY=5 \
+#   python openevolve/openevolve-run.py \
+#       flashinfer_bench/solution/triton/kernel_baseline.py \
+#       workspace/evaluator.py \
+#       --config config_vllm.yaml \
+#       --iterations 200
+#
+# SINGLE-MODEL FALLBACK (simpler):
+#   Just run Qwen3-30B-A3B alone on GPUs 2,3,4 and remove the second model
+#   from the llm.models list below.
+# ============================================================================
+
+# ── General ─────────────────────────────────────────────────────────────────
+max_iterations: 200
+checkpoint_interval: 10
+log_level: "INFO"
+random_seed: 42
+
+# ── Evolution strategy ──────────────────────────────────────────────────────
+diff_based_evolution: true
+max_code_length: 50000
+
+# ── Early stopping ──────────────────────────────────────────────────────────
+early_stopping_patience: 60            # V3 explores more; give it room
+convergence_threshold: 0.005           # tighter; detect small gains
+early_stopping_metric: "combined_score"
+
+# ── LLM configuration (dual vLLM instances) ────────────────────────────────
+# Two models on different ports: fast explorer + deep coder.
+# OpenEvolve samples from them by weight each iteration.
+# Model names MUST match the --model flags you passed to vLLM.
+llm:
+  models:
+    - name: "Qwen/Qwen3-30B-A3B"                    # fast MoE explorer (port 8000)
+      weight: 0.6
+    - name: "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"   # deep code reasoning (port 8001)
+      weight: 0.4
+
+  evaluator_models:
+    - name: "Qwen/Qwen3-30B-A3B"                    # fast model for eval feedback
+      weight: 1.0
+
+  # NOTE: OpenEvolve uses a single api_base for all models. If your setup
+  # requires two ports, you'll need a lightweight reverse proxy (e.g., nginx
+  # or litellm) that routes by model name:
+  #   pip install litellm[proxy]
+  #   litellm --model qwen3=openai/Qwen/Qwen3-30B-A3B --api_base http://localhost:8000/v1 \
+  #           --model qwen-coder=openai/Qwen/Qwen2.5-Coder-32B-Instruct-AWQ --api_base http://localhost:8001/v1 \
+  #           --port 4000
+  # Then set api_base below to http://localhost:4000/v1/
+  #
+  # OR just use the single-model setup (simpler — Qwen3-30B-A3B on port 8000):
+  api_base: "http://localhost:8000/v1/"
+  api_key: "not-needed"              # vLLM accepts any non-empty key
+
+  temperature: 0.7                   # higher temp = more diverse exploration
+  top_p: 0.95
+  max_tokens: 8192                   # big rewrites allowed
+  timeout: 300                       # MoE models are fast; 5 min is plenty
+  retries: 2
+  retry_delay: 5
+
+# ── Prompt ──────────────────────────────────────────────────────────────────
+prompt:
+  system_message: |
+    You are an expert GPU kernel engineer specialising in Triton and CUDA.
+
+    TARGET: Optimise a fused Mixture-of-Experts (MoE) kernel for NVIDIA GPUs.
+    DEFINITION: moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048
+    MODEL: DeepSeek-V3 / DeepSeek-R1 architecture
+
+    The kernel performs:
+      1. FP8 block-scale dequantisation (block_size=128)
+      2. DeepSeek-V3 no-aux routing (sigmoid, group top-2, top-4 groups, global top-8)
+      3. Per-expert GEMM1 (gate+up projection, 7168→4096)
+      4. SwiGLU activation
+      5. Per-expert GEMM2 (down projection, 2048→7168)
+      6. Weighted accumulation across selected experts
+
+    CONSTRAINTS:
+      - Function signature is FIXED (DPS: 10 inputs + 1 output tensor).
+      - Must pass correctness checks against the PyTorch reference.
+      - The file must be self-contained (import triton, torch, etc. at the top).
+
+    OPTIMISATION PRIORITIES (in order):
+      1. Replace the sequential Python expert loop with parallel Triton kernels
+      2. Fuse FP8 dequant into the GEMMs (avoid materialising full fp32 weight tensors)
+      3. Use tl.dot with fp8 operands for tensor-core acceleration
+      4. Tile the GEMMs for shared-memory reuse
+      5. Vectorise routing / top-k selection
+      6. Minimise global memory traffic
+
+    CONSTRAINTS YOU MUST NOT VIOLATE:
+      - Do NOT change the function name or its parameter list.
+      - Do NOT add or remove parameters.
+      - Keep all code between EVOLVE-BLOCK-START and EVOLVE-BLOCK-END.
+
+    IMPORTANT: USE THE HINTS IN kernel.py
+      - Treat the comments under "Optimization targets" and "Hardware hints"
+        in the kernel.py file as high-priority guidance.
+      - Prefer small, local edits that directly implement those hints.
+
+    RESPONSE FORMAT (STRICT):
+      - Output ONLY SEARCH/REPLACE diff blocks.
+      - Do NOT include markdown fences, prose, explanations, or bullet points.
+      - Use this exact format per edit:
+        <<<<<<< SEARCH
+        <exact existing code>
+        =======
+        <replacement code>
+        >>>>>>> REPLACE
+      - If no safe improvement is possible, output one no-op valid diff block
+        that matches and replaces identical text.
+
+  evaluator_system_message: "You are an expert GPU performance analyst reviewing Triton kernel code."
+
+  num_top_programs: 2                  # show LLM the top-2 so it can combine ideas
+  num_diverse_programs: 1              # also show 1 diverse (novel) program
+  use_template_stochasticity: true     # randomise prompt phrasing for diversity
+  include_artifacts: false
+  max_artifact_bytes: 20480
+
+# ── Database ────────────────────────────────────────────────────────────────
+database:
+  population_size: 300                 # larger population for 200 iters
+  archive_size: 50                     # keep more diverse elites
+  num_islands: 5                       # more islands = more diverse exploration
+  migration_interval: 20
+  migration_rate: 0.15
+
+  feature_dimensions:
+    - "complexity"
+    - "score"
+  feature_bins: 8
+
+# ── Evaluator ───────────────────────────────────────────────────────────────
+evaluator:
+  timeout: 600
+  max_retries: 2
+  cascade_evaluation: false
+  parallel_evaluations: 1
+  use_llm_feedback: false

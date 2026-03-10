@@ -54,7 +54,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 DEFINITION_NAME = "moe_fp8_block_scale_ds_routing_topk8_ng8_kg4_e32_h7168_i2048"
 DEFAULT_AUTHOR = "bench-test"
 DEFAULT_LANGUAGE = "triton"
-DEFAULT_ENTRY_POINT = "kernel"
+DEFAULT_ENTRY_POINT = "kernel.py::kernel"
 
 
 def get_dataset_path() -> str:
