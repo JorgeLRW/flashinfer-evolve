@@ -11,9 +11,10 @@ __pycache__/
 
 # ── COMPETITION-SENSITIVE: Do NOT commit ────────────────────────────────────
 
-# Config contains machine IPs, LLM strategy, infra topology
+# Config contains machine IPs, LLM strategy, infra topology, API keys
 config.yaml
 config_vllm.yaml
+config_openai.yaml
 
 # Evaluator contains scoring logic (competitive intel)
 workspace/evaluator.py
@@ -21,17 +22,29 @@ workspace/evaluator.py
 # OpenEvolve outputs — evolved kernels are your submissions
 openevolve_output/
 flashinfer_bench/solution/triton/openevolve_output/
+b2_output/
 **/checkpoints/
 **/evolution_trace*
 
 # Packed solutions (submission artifacts)
 flashinfer_bench/solution.json
 
+# Large JSON program databases (checkpoint artifacts)
+**/programs/*.json
+**/best_program_info.json
+
 # ── Local experiment artifacts ──────────────────────────────────────────────
 ncu_output/
 logs/openevolve_dev_config_*.yaml
 *.log
 *.ncu-rep
+
+# Test / scratch scripts
+test_modal_eval.py
+scripts/test_eval.py
+scripts/patch_utils.py
+scripts/show_ref.py
+scripts/list_workloads.py
 
 # Environment configs: Env local to laptop, no worrying over commits ─────────
 .env
